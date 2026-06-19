@@ -1,0 +1,120 @@
+﻿name: Release
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  release:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.platform }}
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Vulkan SDK (Windows only)
+        if: matrix.platform == 'windows-latest'
+        uses: jakoch/install-vulkan-sdk-action@v1
+        with: 
+          cache: true
+
+      - name: Install Rust Target (macOS only)
+        if: matrix.platform == 'macos-latest'
+        run: |
+          rustup target add x86_64-apple-darwin
+          rustup target add aarch64-apple-darwin
+
+      - name: Set macOS Deployment Target (macOS only)
+        if: matrix.platform == 'macos-latest'
+        run: |
+          echo "MACOSX_DEPLOYMENT_TARGET=11.0" >> $GITHUB_ENV
+          echo "CMAKE_OSX_DEPLOYMENT_TARGET=11.0" >> $GITHUB_ENV
+          echo "CFLAGS=-mmacosx-version-min=11.0" >> $GITHUB_ENV
+          echo "CXXFLAGS=-mmacosx-version-min=11.0" >> $GITHUB_ENV
+          echo "LDFLAGS=-mmacosx-version-min=11.0" >> $GITHUB_ENV
+
+      - name: Create Cargo Config (macOS only)
+        if: matrix.platform == 'macos-latest'
+        run: |
+          mkdir -p src-tauri/.cargo
+          
+          CLANG_RT_PATH=$(clang -print-libgcc-file-name --rtlib=compiler-rt)
+          echo "Resolved CLANG_RT_PATH: $CLANG_RT_PATH"
+          
+          cat > src-tauri/.cargo/config.toml << EOF
+          [build]
+          rustflags = ["-C", "link-arg=-mmacosx-version-min=11.0", "-C", "link-arg=$CLANG_RT_PATH"]
+          EOF
+
+      - name: Compile Mac Binaries (macOS only)
+        if: matrix.platform == 'macos-latest'
+        run: |
+          # Clean up Windows binaries to save space
+          rm -f src-tauri/resources/bin/*.exe src-tauri/resources/bin/*.dll
+          
+          # Build llama-server (disabling curl/openssl dependencies for clean universal builds)
+          git clone https://github.com/ggerganov/llama.cpp.git
+          cd llama.cpp
+          cmake -B build -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 -DLLAMA_CURL=OFF -DLLAMA_OPENSSL=OFF -DGGML_METAL=ON -DGGML_METAL_EMBED_LIBRARY=ON
+          cmake --build build --config Release -j 4 --target llama-server
+          mkdir -p ../src-tauri/resources/bin
+          find build -name "llama-server" -type f -exec cp {} ../src-tauri/resources/bin/llama-server-universal-apple-darwin \;
+          cd ..
+          
+      - name: Download Windows AI Binaries (Windows only)
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          New-Item -ItemType Directory -Force -Path "src-tauri/resources/bin"
+          gh release download --repo ggerganov/llama.cpp --pattern "*bin-win-vulkan-x64.zip" --output "llama-vulkan.zip"
+          Expand-Archive -Path "llama-vulkan.zip" -DestinationPath "temp_llama" -Force
+          Get-ChildItem -Path "temp_llama" -Recurse -Include *.exe,*.dll | ForEach-Object {
+            if ($_.Name -eq "llama-server.exe") {
+              Copy-Item $_.FullName -Destination "src-tauri/resources/bin/llama-server-x86_64-pc-windows-msvc.exe" -Force
+            } else {
+              Copy-Item $_.FullName -Destination "src-tauri/resources/bin/$($_.Name)" -Force
+            }
+          }
+          Remove-Item -Path "temp_llama" -Recurse -Force
+          Remove-Item "llama-vulkan.zip" -Force
+
+
+      - name: Set Windows Cargo Target Dir
+        if: matrix.platform == 'windows-latest'
+        shell: bash
+        run: echo "CARGO_TARGET_DIR=D:/t" >> $GITHUB_ENV
+
+      - name: Install Frontend Dependencies
+        run: npm install
+
+      - name: Build Tauri App
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Flattened onto a single line to guarantee the GitHub Actions parser accepts the expression cleanly
+          BINDGEN_EXTRA_CLANG_ARGS: ${{ matrix.platform == 'macos-latest' && '-Wno-everything -D__counted_by(x)= -D__sized_by(x)= -D__ended_by(x)= -D__single= -D__indexable= -D__unsafe_buffer_usage= -D__bnd_num_elements(x)= -D__bnd_capacity(x)=' || '-Wno-everything' }}
+        with:
+          tagName: app-v__VERSION__
+          releaseName: "Draftmic v__VERSION__"
+          releaseBody: "See the assets below to download and install this version."
+          releaseDraft: true
+          prerelease: false
+          # Ensure macOS builds as a universal binary for both Intel and Apple Silicon
+          args: ${{ matrix.platform == 'macos-latest' && '--target universal-apple-darwin' || '' }}
