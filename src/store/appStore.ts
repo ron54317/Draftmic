@@ -124,20 +124,20 @@ export const WHISPER_LANGUAGES: WhisperLanguage[] = [
 ];
 
 export const WHISPER_MODELS = [
-  { id: "distil-large-v3", name: "Distil-Large V3 (EN Only)", size: "754 MB", speed: "Medium", quality: "Ultra", url: "https://huggingface.co/distil-whisper/distil-large-v3-ggml/resolve/main/ggml-distil-large-v3.bin" },
-  { id: "tiny-q5",    name: "Tiny (Q5)",    size: "31 MB",  speed: "Super Fast", quality: "Basic",    url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny-q5_1.bin" },
-  { id: "base-q5",    name: "Base (Q5)",    size: "57 MB",  speed: "Fast",    quality: "Good",     url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base-q5_1.bin" },
-  { id: "small-q5",   name: "Small (Q5)",   size: "185 MB", speed: "Medium",  quality: "Better",   url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin" },
-  { id: "turbo-q5",   name: "Turbo V3 (Q5)",size: "547 MB", speed: "Medium",    quality: "Ultra",    url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin" },
+  { id: "distil-large-v3", name: "Distil-Large V3 (EN Only)", size: "754 MB", speed: "Medium", quality: "Ultra", url: "https://huggingface.co/distil-whisper/distil-large-v3-ggml/resolve/main/ggml-distil-large-v3.bin", notes: ["Ultra high accuracy", "Requires mid-to-high spec PC", "English only"] },
+  { id: "tiny-q5",    name: "Tiny (Q5)",    size: "31 MB",  speed: "Super Fast", quality: "Basic",    url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny-q5_1.bin", notes: ["Incredibly fast", "Runs smoothly on any PC or older laptop", "Good for quick drafts"] },
+  { id: "base-q5",    name: "Base (Q5)",    size: "57 MB",  speed: "Fast",    quality: "Good",     url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base-q5_1.bin", notes: ["Very fast", "Runs on most laptops smoothly", "Good balance of speed and accuracy"] },
+  { id: "small-q5",   name: "Small (Q5)",   size: "185 MB", speed: "Medium",  quality: "Better",   url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin", notes: ["High accuracy across many languages", "Requires mid spec PC", "Great for multilingual dictation"] },
+  { id: "turbo-q5",   name: "Turbo V3 (Q5)",size: "547 MB", speed: "Medium",    quality: "Ultra",    url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin", notes: ["Exceptional accuracy and speed", "Requires high spec PC or Mac (Apple Silicon)", "State of the art transcription"] },
 ];
 
 export const LLM_MODELS = [
-  { id: "llama-3.1-8b-instruct", name: "Llama 3.1 (8B)", size: "4.9 GB", speed: "Medium", logo: "/llama.png", url: "https://huggingface.co/bartowski/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf" },
-  { id: "qwen2.5-7b-instruct", name: "Qwen 2.5 (7B)", size: "4.7 GB", speed: "Medium", logo: "/qwen.png", url: "https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF/resolve/main/qwen2.5-7b-instruct-q4_k_m.gguf" },
-  { id: "mistral-7b-instruct-v0.3", name: "Mistral v0.3 (7B)", size: "4.4 GB", speed: "Medium", logo: "/mistral.png", url: "https://huggingface.co/MaziyarPanahi/Mistral-7B-Instruct-v0.3-GGUF/resolve/main/Mistral-7B-Instruct-v0.3.Q4_K_M.gguf" },
-  { id: "llama-3.2-3b-instruct", name: "Llama 3.2 (3B)", size: "2.1 GB", speed: "Fast", logo: "/llama.png", url: "https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf", recommended: true },
-  { id: "gemma-2-2b-it", name: "Gemma 2 (2B)", size: "1.7 GB", speed: "Fast", logo: "/google.svg", url: "https://huggingface.co/bartowski/gemma-2-2b-it-GGUF/resolve/main/gemma-2-2b-it-Q4_K_M.gguf" },
-  { id: "qwen2.5-1.5b-instruct", name: "Qwen 2.5 (1.5B)", size: "1.1 GB", speed: "Super Fast", logo: "/qwen.png", url: "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf" },
+  { id: "llama-3.1-8b-instruct", name: "Llama 3.1 (8B)", size: "4.9 GB", speed: "Medium", logo: "/llama.png", url: "https://huggingface.co/bartowski/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf", notes: ["State of the art 8B model", "Requires high spec PC (16GB+ RAM)", "Excellent reasoning and formatting"] },
+  { id: "qwen2.5-7b-instruct", name: "Qwen 2.5 (7B)", size: "4.7 GB", speed: "Medium", logo: "/qwen.png", url: "https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF/resolve/main/qwen2.5-7b-instruct-q4_k_m.gguf", notes: ["Powerful multilingual capabilities", "Requires high spec PC (16GB+ RAM)", "Top tier open weights model"] },
+  { id: "mistral-7b-instruct-v0.3", name: "Mistral v0.3 (7B)", size: "4.4 GB", speed: "Medium", logo: "/mistral.png", url: "https://huggingface.co/MaziyarPanahi/Mistral-7B-Instruct-v0.3-GGUF/resolve/main/Mistral-7B-Instruct-v0.3.Q4_K_M.gguf", notes: ["Solid all-rounder", "Requires high spec PC (16GB+ RAM)", "Uncensored instruction following"] },
+  { id: "llama-3.2-3b-instruct", name: "Llama 3.2 (3B)", size: "2.1 GB", speed: "Fast", logo: "/llama.png", url: "https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf", recommended: true, notes: ["Very fast and highly capable", "Runs well on mid spec PCs (8GB+ RAM)", "Highly recommended balance"] },
+  { id: "gemma-2-2b-it", name: "Gemma 2 (2B)", size: "1.7 GB", speed: "Fast", logo: "/google.svg", url: "https://huggingface.co/bartowski/gemma-2-2b-it-GGUF/resolve/main/gemma-2-2b-it-Q4_K_M.gguf", notes: ["Ultra fast and lightweight", "Runs on almost any modern PC", "Great for simple formatting"] },
+  { id: "qwen2.5-1.5b-instruct", name: "Qwen 2.5 (1.5B)", size: "1.1 GB", speed: "Super Fast", logo: "/qwen.png", url: "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf", notes: ["Extremely fast generation", "Runs smoothly on older hardware", "Good basic formatting capabilities"] },
 ];
 
 interface AppState {

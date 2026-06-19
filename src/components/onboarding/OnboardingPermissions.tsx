@@ -38,10 +38,10 @@ export function OnboardingPermissions() {
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
-        justifyContent: "center",
         padding: "48px 64px",
         gap: 32,
         position: "relative",
+        minHeight: "100%",
       }}
     >
       {/* Background gradients from the original design */}
@@ -75,9 +75,10 @@ export function OnboardingPermissions() {
       <HotkeyModal isOpen={isHotkeyModalOpen} onClose={() => setIsHotkeyModalOpen(false)} />
 
       {/* Content wrapper */}
-      <motion.div 
-          className='bg-black/80 backdrop-blur-sm shadow-[0_35px_60px_-15px_rgba(0,0,0,0.5)] flex flex-col p-6 gap-4 overflow-hidden border border-gray-800 relative z-10'
-          style={{ width: "100%", maxWidth: 440, minHeight: 400, borderRadius: "2rem" }}
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", width: "100%", margin: "auto 0", gap: 32 }}>
+        <motion.div 
+            className='bg-black/80 backdrop-blur-sm shadow-[0_35px_60px_-15px_rgba(0,0,0,0.5)] flex flex-col p-6 gap-4 overflow-hidden border border-gray-800 relative z-10'
+            style={{ width: "100%", maxWidth: 440, minHeight: 400, borderRadius: "2rem" }}
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.3, ease: "easeOut" }}
@@ -261,6 +262,7 @@ export function OnboardingPermissions() {
           Continue <ArrowRight size={16} />
         </button>
       </motion.div>
+      </div>
     </div>
   );
 }

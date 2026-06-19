@@ -22,10 +22,10 @@ export function OnboardingTutorial() {
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
-        justifyContent: "center",
         padding: "32px 48px",
         gap: 20,
         position: "relative",
+        minHeight: "100%",
       }}
     >
       <div style={{
@@ -43,6 +43,7 @@ export function OnboardingTutorial() {
       }} />
 
       {/* Content wrapper */}
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", width: "100%", margin: "auto 0" }}>
       <AnimatePresence mode="wait">
         {!scenario ? (
           <motion.div 
@@ -113,10 +114,10 @@ export function OnboardingTutorial() {
 
             <button
               className="btn btn-ghost mt-4"
-              onClick={() => setOnboardingStep("model")}
+              onClick={() => completeOnboarding()}
               style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 20px", borderRadius: 10, fontSize: 13, fontWeight: 600 }}
             >
-              <ArrowLeft size={16} /> Back
+              Skip Tutorial <ArrowRight size={16} />
             </button>
           </motion.div>
         ) : (
@@ -162,6 +163,7 @@ export function OnboardingTutorial() {
           </motion.div>
         )}
       </AnimatePresence>
+      </div>
     </div>
   );
 }

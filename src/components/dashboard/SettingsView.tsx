@@ -104,6 +104,9 @@ export function SettingsView() {
 
   const handleWhisperModelChange = async (newModelId: string) => {
     setSelectedModel(newModelId);
+    if (newModelId === "distil-large-v3" && language !== "en" && !language.startsWith("auto")) {
+      setLanguage("en");
+    }
   };
 
   const handleLlmModelChange = async (newModelId: string) => {
@@ -240,7 +243,9 @@ export function SettingsView() {
           <Select
             value={language}
             onChange={setLanguage}
-            options={WHISPER_LANGUAGES.map((l) => ({
+            options={WHISPER_LANGUAGES
+              .filter((l) => selectedModel !== "distil-large-v3" || l.code === "en" || l.code.startsWith("auto"))
+              .map((l) => ({
               value: l.code,
               label: `${l.name} ${l.native !== l.name && !l.code.startsWith("auto") ? `(${l.native})` : ""}`
             }))}

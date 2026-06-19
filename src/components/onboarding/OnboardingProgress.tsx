@@ -1,6 +1,7 @@
 import React from "react";
 import { motion } from "framer-motion";
 import { Check } from "lucide-react";
+import { useAppStore } from "../../store/appStore";
 
 export type OnboardingStep = "welcome" | "permissions" | "model" | "tutorial";
 const STEPS: { id: OnboardingStep; label: string }[] = [
@@ -16,6 +17,7 @@ interface Props {
 
 export function OnboardingProgress({ currentStep }: Props) {
   const currentIndex = STEPS.findIndex((s) => s.id === currentStep);
+  const setOnboardingStep = useAppStore((s) => s.setOnboardingStep);
 
   return (
     <div className="absolute top-0 inset-x-0 flex items-center justify-center z-50 pt-6 pointer-events-none">
@@ -42,7 +44,10 @@ export function OnboardingProgress({ currentStep }: Props) {
                 </div>
               )}
 
-              <div className="flex items-center gap-2.5 relative">
+              <div 
+                className={`flex items-center gap-2.5 relative ${isCompleted ? 'cursor-pointer hover:opacity-80 transition-opacity' : ''}`}
+                onClick={() => isCompleted && setOnboardingStep(step.id)}
+              >
                 {/* Step Circle */}
                 <div
                   className={`relative flex items-center justify-center w-7 h-7 rounded-full text-[11px] font-bold transition-all duration-500 z-10 shrink-0

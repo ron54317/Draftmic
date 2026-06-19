@@ -9,6 +9,7 @@ export interface ModelOption {
   quality?: string;
   logo?: string;
   recommended?: boolean;
+  notes?: string[];
 }
 
 interface ModelSelectionGroupProps {
@@ -113,6 +114,12 @@ export function ModelSelectionGroup({ models, selectedId, onSelect, disabled }: 
                           <Check size={14} style={{ color: activeColor }} />
                           Optimized for fast inference
                         </motion.div>
+                        {model.notes?.map((note, idx) => (
+                          <motion.div key={idx} initial={{ opacity: 0, y: 3 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15 + (idx * 0.05) }} className="flex items-center gap-2.5 text-[12px] text-gray-400">
+                            <Check size={14} style={{ color: activeColor }} />
+                            {note}
+                          </motion.div>
+                        ))}
                       </div>
                     </motion.div>
                   )}

@@ -679,7 +679,7 @@ export const DictateWidget: React.FC<DictateWidgetProps> = ({ inline = false, on
                 className="absolute right-[calc(50%+76px)] bottom-0 bg-zinc-950 border border-white/10 shadow-[0_4px_20px_rgba(0,0,0,0.4)] rounded-xl overflow-y-auto pointer-events-auto z-50 flex flex-col interactive-node custom-scrollbar"
                 style={{ maxHeight: "140px", minWidth: "110px" }}
               >
-                {WHISPER_LANGUAGES.map(l => (
+                {WHISPER_LANGUAGES.filter(l => selectedModel !== "distil-large-v3" || l.code === "en" || l.code.startsWith("auto")).map(l => (
                   <div
                     key={l.code}
                     onClick={() => {

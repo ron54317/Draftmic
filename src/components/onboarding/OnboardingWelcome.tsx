@@ -35,10 +35,9 @@ export function OnboardingWelcome() {
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
-        justifyContent: "center",
         padding: "48px 64px",
         position: "relative",
-        overflow: "hidden",
+        minHeight: "100%",
       }}
     >
       {/* Background glow effects (Sun flare) */}
@@ -57,7 +56,7 @@ export function OnboardingWelcome() {
         }} 
       />
 
-      <div style={{ position: "relative", zIndex: 1, display: "flex", flexDirection: "column", alignItems: "center", width: "100%", maxWidth: 640 }}>
+      <div style={{ position: "relative", zIndex: 1, display: "flex", flexDirection: "column", alignItems: "center", width: "100%", maxWidth: 640, margin: "auto 0" }}>
         {/* Logo */}
         <motion.div
           initial={{ opacity: 0, scale: 0.8, y: 10 }}

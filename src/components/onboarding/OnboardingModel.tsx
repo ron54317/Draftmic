@@ -77,10 +77,10 @@ export function OnboardingModel() {
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
-        justifyContent: "center",
         padding: "32px 48px",
         gap: 20,
         position: "relative",
+        minHeight: "100%",
       }}
     >
       <div style={{
@@ -98,6 +98,7 @@ export function OnboardingModel() {
       }} />
 
       {/* Content wrapper */}
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", width: "100%", margin: "auto 0", gap: 20 }}>
       <motion.div 
         initial={{ opacity: 0, y: 10 }}
         animate={{ opacity: 1, y: 0 }}
@@ -360,6 +361,7 @@ export function OnboardingModel() {
           <ArrowLeft size={16} /> Back
         </motion.button>
       )}
+      </div>
     </div>
   );
 }
