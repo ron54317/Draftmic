@@ -4,6 +4,8 @@ import { useAppStore } from "../../store/appStore";
 import { GlowCard } from "../ui/spotlight-card";
 import { useState, useEffect, useRef } from "react";
 
+import { openUrl } from "@tauri-apps/plugin-opener";
+
 export function OnboardingWelcome() {
   const setOnboardingStep = useAppStore((s) => s.setOnboardingStep);
   const [agreed, setAgreed] = useState(false);
@@ -196,9 +198,9 @@ export function OnboardingWelcome() {
           </div>
           <div style={{ fontSize: 13, color: agreed ? "var(--text-primary)" : "var(--text-secondary)", lineHeight: 1.5, userSelect: "none" }}>
             I have read and agree to the open-source{" "}
-            <a href="https://draftmic.com/terms" target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} style={{ color: "var(--accent)", textDecoration: "none", fontWeight: 500 }}>Terms of Service</a>{" "}
+            <a href="#" onClick={async (e) => { e.preventDefault(); e.stopPropagation(); await openUrl("https://draftmic.com/terms"); }} style={{ color: "var(--accent)", textDecoration: "none", fontWeight: 500 }}>Terms of Service</a>{" "}
             and{" "}
-            <a href="https://draftmic.com/privacy" target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} style={{ color: "var(--accent)", textDecoration: "none", fontWeight: 500 }}>Privacy Policy</a>.
+            <a href="#" onClick={async (e) => { e.preventDefault(); e.stopPropagation(); await openUrl("https://draftmic.com/privacy"); }} style={{ color: "var(--accent)", textDecoration: "none", fontWeight: 500 }}>Privacy Policy</a>.
           </div>
         </motion.div>
 

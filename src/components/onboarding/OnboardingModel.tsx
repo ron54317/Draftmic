@@ -336,7 +336,11 @@ export function OnboardingModel() {
                 whileHover={{ scale: 1.02 }}
                 whileTap={{ scale: 0.98 }}
                 className="btn btn-primary"
-                onClick={() => setOnboardingStep("tutorial")}
+                onClick={() => {
+                  invoke("start_whisper_server", { modelId: selectedModel }).catch(console.error);
+                  invoke("start_llama_server", { modelId: selectedLlmModel }).catch(console.error);
+                  setOnboardingStep("tutorial");
+                }}
                 style={{ width: "100%", padding: "16px 0", fontSize: 15, fontWeight: 700, borderRadius: 14 }}
               >
                 Continue to Tutorial →

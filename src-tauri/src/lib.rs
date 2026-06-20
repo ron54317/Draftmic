@@ -32,6 +32,7 @@ pub struct AppState {
     pub sample_rate: u32,
     pub llama_server_child: Option<std::process::Child>,
     pub llama_server_starting: bool, // guard: prevents concurrent start races
+    pub whisper_starting: bool, // guard: prevents concurrent whisper loads
     pub last_activity: std::time::Instant,
     // In-memory audio and transcription context
     pub resampled_audio: Arc<Mutex<Option<Vec<f32>>>>,
@@ -62,6 +63,7 @@ impl Default for AppState {
             sample_rate: 44100,
             llama_server_child: None,
             llama_server_starting: false,
+            whisper_starting: false,
             last_activity: std::time::Instant::now(),
             resampled_audio: Arc::new(Mutex::new(None)),
             whisper_ctx: Arc::new(Mutex::new(None)),
@@ -377,6 +379,95 @@ async fn stop_recording(
     Ok(())
 }
 
+async fn ensure_whisper_loaded_internal(app: &AppHandle, state: &SharedState, model_id: &str) -> Result<(), String> {
+    loop {
+        let is_starting = state.lock().unwrap().whisper_starting;
+        if !is_starting { break; }
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+    }
+
+    let (needs_load, use_gpu, gpu_device) = {
+        let mut s = state.lock().map_err(|e| e.to_string())?;
+        s.last_activity = std::time::Instant::now();
+        let current = s.current_whisper_model.lock().unwrap().clone();
+        let ctx_is_none = s.whisper_ctx.lock().unwrap().is_none();
+        (current != model_id || ctx_is_none, s.use_gpu, s.gpu_device)
+    };
+
+    if !needs_load {
+        return Ok(());
+    }
+
+    {
+        let mut s = state.lock().map_err(|e| e.to_string())?;
+        s.whisper_starting = true;
+    }
+
+    let model_path_str = model_path(app, model_id).to_string_lossy().into_owned();
+    let app_clone = app.clone();
+    let model_id_owned = model_id.to_string();
+
+    let res = async move {
+        eprintln!("DEBUG: Loading whisper model {} into memory (use_gpu={}, device={})...", model_id_owned, use_gpu, gpu_device);
+        if !model_path(&app_clone, &model_id_owned).exists() {
+            return Err(format!("Model {} not found on disk", model_id_owned));
+        }
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
+
+        let resolved_device: i32 = if use_gpu && gpu_device < 0 {
+            tokio::task::spawn_blocking(|| {
+                let devices = get_gpu_devices_cached();
+                if devices.len() <= 1 {
+                    return -1;
+                }
+                pick_best_gpu_device(devices)
+                    .filter(|&idx| idx > 0)
+                    .unwrap_or(-1)
+            })
+            .await
+            .unwrap_or(-1)
+        } else {
+            gpu_device
+        };
+
+        let ctx = tokio::task::spawn_blocking(move || {
+            let mut params = WhisperContextParameters::default();
+            params.use_gpu(use_gpu);
+            if use_gpu && resolved_device >= 0 {
+                params.gpu_device = resolved_device;
+                eprintln!("DEBUG: Whisper auto-selected GPU device {}", resolved_device);
+            }
+
+            match WhisperContext::new_with_params(&model_path_str, params) {
+                Ok(ctx) => Ok(ctx),
+                Err(e) if use_gpu => {
+                    eprintln!("WARNING: Whisper GPU load failed ({e}). Falling back to CPU...");
+                    let mut cpu_params = WhisperContextParameters::default();
+                    cpu_params.use_gpu(false);
+                    WhisperContext::new_with_params(&model_path_str, cpu_params)
+                        .map_err(|e2| format!("CPU fallback also failed: {e2}"))
+                }
+                Err(e) => Err(e.to_string()),
+            }
+        })
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| format!("Failed to load Whisper model: {}", e))?;
+
+        let s = state.lock().map_err(|e| e.to_string())?;
+        *s.current_whisper_model.lock().unwrap() = model_id_owned.clone();
+        *s.whisper_ctx.lock().unwrap() = Some(ctx);
+        Ok::<(), String>(())
+    }.await;
+
+    if let Ok(mut s) = state.lock() {
+        s.whisper_starting = false;
+    }
+
+    res
+}
+
 /// Run transcription engine in-process on the resampled audio buffer
 #[tauri::command]
 async fn transcribe(
@@ -397,80 +488,7 @@ async fn transcribe(
         None => return Err("No audio data available for transcription".into()),
     };
 
-    let model_path_str = model_path(&app, &model_id).to_string_lossy().into_owned();
-
-    // Check if model changed or is not loaded
-    let (needs_load, use_gpu, gpu_device) = {
-        let mut s = state.lock().map_err(|e| e.to_string())?;
-        s.last_activity = std::time::Instant::now();
-        let current = s.current_whisper_model.lock().unwrap().clone();
-        let ctx_is_none = s.whisper_ctx.lock().unwrap().is_none();
-        (current != model_id || ctx_is_none, s.use_gpu, s.gpu_device)
-    };
-
-    if needs_load {
-        eprintln!("DEBUG: Loading whisper model {} into memory (use_gpu={}, device={})...", model_id, use_gpu, gpu_device);
-        if !model_path(&app, &model_id).exists() {
-            return Err(format!("Model {} not found on disk", model_id));
-        }
-
-        // Small yield so any previously dropped context on a different GPU
-        // has time to fully release its CUDA/Vulkan resources before we init a new one.
-        tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
-
-        // Resolve the concrete device index to use for this load.
-        // When the user chose Auto (-1) we actively pick the best GPU so that
-        // on hybrid systems (iGPU + dGPU) we don't accidentally land on the
-        // integrated GPU (which is almost always device 0 in the OS list).
-        let resolved_device: i32 = if use_gpu && gpu_device < 0 {
-            tokio::task::spawn_blocking(|| {
-                let devices = get_gpu_devices_cached(); // instant after first call
-                if devices.len() <= 1 {
-                    // Single GPU (or none detected) — skip scoring, let library use device 0
-                    return -1;
-                }
-                pick_best_gpu_device(devices)
-                    .filter(|&idx| idx > 0) // only override if best isn't already device 0
-                    .unwrap_or(-1)          // -1 = let transcription engine use its own default
-            })
-            .await
-            .unwrap_or(-1)
-        } else {
-            gpu_device
-        };
-
-        let ctx = tokio::task::spawn_blocking(move || {
-            let mut params = WhisperContextParameters::default();
-            params.use_gpu(use_gpu);
-            // Set specific GPU device index (either user-chosen or best auto-detected)
-            if use_gpu && resolved_device >= 0 {
-                params.gpu_device = resolved_device;
-                eprintln!("DEBUG: Whisper auto-selected GPU device {}", resolved_device);
-            }
-
-            // Primary attempt: use the user-chosen GPU settings.
-            match WhisperContext::new_with_params(&model_path_str, params) {
-                Ok(ctx) => Ok(ctx),
-                Err(e) if use_gpu => {
-                    // GPU load failed (bad device index, insufficient VRAM, driver issue, etc.)
-                    // Automatically fall back to CPU so the app never crashes on a bad GPU config.
-                    eprintln!("WARNING: Whisper GPU load failed ({e}). Falling back to CPU...");
-                    let mut cpu_params = WhisperContextParameters::default();
-                    cpu_params.use_gpu(false);
-                    WhisperContext::new_with_params(&model_path_str, cpu_params)
-                        .map_err(|e2| format!("CPU fallback also failed: {e2}"))
-                }
-                Err(e) => Err(e.to_string()),
-            }
-        })
-        .await
-        .map_err(|e| e.to_string())?  // JoinError (spawn_blocking panic)
-        .map_err(|e| format!("Failed to load Whisper model: {}", e))?;
-
-        let s = state.lock().map_err(|e| e.to_string())?;
-        *s.current_whisper_model.lock().unwrap() = model_id.clone();
-        *s.whisper_ctx.lock().unwrap() = Some(ctx);
-    }
+    ensure_whisper_loaded_internal(&app, state.inner(), &model_id).await?;
 
     let lang = language.unwrap_or_else(|| "auto".into());
 
@@ -525,12 +543,8 @@ async fn transcribe(
 
 
 #[tauri::command]
-async fn start_whisper_server(app: AppHandle, _state: State<'_, SharedState>, model_id: String) -> Result<(), String> {
-    let path = model_path(&app, &model_id);
-    if !path.exists() {
-        return Err(format!("Whisper model not found at {}", path.display()));
-    }
-    Ok(())
+async fn start_whisper_server(app: AppHandle, state: State<'_, SharedState>, model_id: String) -> Result<(), String> {
+    ensure_whisper_loaded_internal(&app, state.inner(), &model_id).await
 }
 
 fn find_llama_server_binary(app: &AppHandle) -> Result<PathBuf, String> {
@@ -1773,15 +1787,26 @@ pub fn run() {
                 .icon(app.default_window_icon().unwrap().clone())
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "quit" => {
-                        let state = app.state::<SharedState>();
-                        if let Ok(mut s) = state.lock() {
-                            if let Some(mut child) = s.llama_server_child.take() {
-                                let _ = child.kill();
-                                let _ = child.wait();
-                            }
-                            // Transcription engine runs in process, no child to kill.
+                        // Take the child handle OUT of the lock before killing it.
+                        // child.wait() is blocking — holding the Mutex on macOS main thread
+                        // would freeze the UI. Consistent with set_use_gpu / start_llama_server_internal.
+                        let old_child = {
+                            let state = app.state::<SharedState>();
+                            state.lock().ok().and_then(|mut s| s.llama_server_child.take())
+                        };
+                        if let Some(mut child) = old_child {
+                            let _ = child.kill();
+                            // Brief wait so llama-server releases GPU resources before process death.
+                            std::thread::sleep(std::time::Duration::from_millis(200));
                         }
-                        app.exit(0);
+                        // Whisper context is in-process — freed automatically on exit.
+                        //
+                        // IMPORTANT: use std::process::exit instead of app.exit(0).
+                        // app.exit(0) fires RunEvent::ExitRequested, which our run loop
+                        // unconditionally cancels with prevent_exit() (needed to keep the
+                        // app alive when the user closes the main window). std::process::exit
+                        // bypasses Tauri's event system and kills the OS process directly.
+                        std::process::exit(0);
                     }
                     "show" => {
                         if let Some(window) = app.get_webview_window("main") {
