@@ -310,7 +310,14 @@ export const useAppStore = create<AppState>()(
           });
         }
       },
-      setWidgetLoadingStyle: (widgetLoadingStyle) => set({ widgetLoadingStyle }),
+      setWidgetLoadingStyle: (widgetLoadingStyle) => {
+        set({ widgetLoadingStyle });
+        if (typeof window !== "undefined" && (window as any).__TAURI_INTERNALS__) {
+          import("@tauri-apps/api/event").then(({ emit }) => {
+            emit("sync-widget-loading-style", widgetLoadingStyle).catch(console.error);
+          });
+        }
+      },
       setTranslationMode: (translationMode) => {
         set({ translationMode });
         if (typeof window !== "undefined" && (window as any).__TAURI_INTERNALS__) {

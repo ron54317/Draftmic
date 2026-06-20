@@ -331,10 +331,14 @@ export const DictateWidget: React.FC<DictateWidgetProps> = ({ inline = false, on
     const unlistenTargetLang = listen<string>("sync-target-language", (e) => {
       useAppStore.setState({ targetLanguage: e.payload });
     });
+    const unlistenLoadingStyle = listen<WidgetLoadingStyle>("sync-widget-loading-style", (e) => {
+      useAppStore.setState({ widgetLoadingStyle: e.payload });
+    });
     return () => {
       unlistenScale.then(f => f());
       unlistenTransMode.then(f => f());
       unlistenTargetLang.then(f => f());
+      unlistenLoadingStyle.then(f => f());
     };
   }, []);
 
