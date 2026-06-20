@@ -1083,12 +1083,16 @@ fn update_interactive_regions(regions: Vec<Region>, state: State<'_, SharedState
 
 fn start_hit_test_loop(window: tauri::WebviewWindow, state: SharedState) {
     std::thread::spawn(move || {
-        use device_query::{DeviceQuery, DeviceState};
-        let device_state = DeviceState::new();
+        let mut last_is_over_any = None;
         
         loop {
-            let mouse = device_state.get_mouse();
-            let (cursor_x, cursor_y) = (mouse.coords.0 as f64, mouse.coords.1 as f64);
+            let (cursor_x, cursor_y) = match window.cursor_position() {
+                Ok(pos) => (pos.x as f64, pos.y as f64),
+                Err(_) => {
+                    std::thread::sleep(std::time::Duration::from_millis(16));
+                    continue;
+                }
+            };
             
             let mut is_over_any = false;
             let mut is_over_interactive = false;
@@ -1105,11 +1109,8 @@ fn start_hit_test_loop(window: tauri::WebviewWindow, state: SharedState) {
                 let pos = monitor.work_area().position;
                 let scale = monitor.scale_factor();
                 
-                let (log_cursor_x, log_cursor_y) = if cfg!(target_os = "macos") {
-                    (cursor_x, cursor_y)
-                } else {
-                    (cursor_x / scale, cursor_y / scale)
-                };
+                let log_cursor_x = cursor_x / scale;
+                let log_cursor_y = cursor_y / scale;
 
                 let log_pos_x = pos.x as f64 / scale;
                 let log_pos_y = pos.y as f64 / scale;
@@ -1128,8 +1129,11 @@ fn start_hit_test_loop(window: tauri::WebviewWindow, state: SharedState) {
                 }
             }
 
-            // Always inform the frontend about hover state so it can expand/collapse
-            let _ = window.emit("global-hover", is_over_any);
+            // Only inform the frontend if the hover state actually changed!
+            if last_is_over_any != Some(is_over_any) {
+                let _ = window.emit("global-hover", is_over_any);
+                last_is_over_any = Some(is_over_any);
+            }
 
             if is_over_interactive && currently_ignoring {
                 let _ = window.set_ignore_cursor_events(false);

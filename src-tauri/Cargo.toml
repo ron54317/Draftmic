@@ -32,9 +32,6 @@ cpal = "0.15"
 # File paths
 dirs = "5"
 
-# Global Input Hook for Static Overlay
-device_query = "2.1.0"
-
 # Find system binaries
 which = "6"
 tauri-plugin-global-shortcut = "2"

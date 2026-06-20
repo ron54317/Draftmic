@@ -416,7 +416,7 @@ export function SettingsView() {
           borderRadius: 9,
           display: "flex",
           flexDirection: "column",
-          gap: 4,
+          gap: 8,
         }}
       >
         <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
@@ -424,16 +424,27 @@ export function SettingsView() {
           <span style={{ color: "var(--text-muted)" }}>0.1.0 Beta</span>
         </div>
         <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
-          <span style={{ color: "var(--text-secondary)" }}>Engine</span>
-          <span style={{ color: "var(--text-muted)" }}>Whisper.cpp (local)</span>
+          <span style={{ color: "var(--text-secondary)" }}>Developer</span>
+          <span style={{ color: "var(--text-muted)" }}>Ron Serpik</span>
         </div>
-        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
-          <span style={{ color: "var(--text-secondary)" }}>Languages</span>
-          <span style={{ color: "var(--text-muted)" }}>99 supported</span>
-        </div>
-        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
-          <span style={{ color: "var(--text-secondary)" }}>Privacy</span>
-          <span style={{ color: "var(--green)", fontWeight: 500 }}>100% local</span>
+        <div style={{ height: 1, background: "var(--border)", margin: "2px 0" }} />
+        <div style={{ display: "flex", gap: 16, fontSize: 12 }}>
+          <a 
+            href="https://draftmic.com/terms" 
+            target="_blank" 
+            rel="noreferrer" 
+            style={{ color: "var(--text-secondary)", textDecoration: "underline", textUnderlineOffset: 2 }}
+          >
+            Terms of Service
+          </a>
+          <a 
+            href="https://draftmic.com/privacy" 
+            target="_blank" 
+            rel="noreferrer" 
+            style={{ color: "var(--text-secondary)", textDecoration: "underline", textUnderlineOffset: 2 }}
+          >
+            Privacy Policy
+          </a>
         </div>
       </div>
       </div>
