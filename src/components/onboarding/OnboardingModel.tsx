@@ -48,6 +48,8 @@ export function OnboardingModel() {
     } catch (err) {
       console.error(err);
       setModelError(String(err));
+      setIsDownloading(false);
+      return;
     }
 
     setDownloadStep("llm");
@@ -63,6 +65,8 @@ export function OnboardingModel() {
     } catch (err) {
       console.error(err);
       setLlmModelError(String(err));
+      setIsDownloading(false);
+      return;
     }
 
     setDownloadingModel(null);

@@ -38,6 +38,7 @@ pub struct AppState {
     pub resampled_audio: Arc<Mutex<Option<Vec<f32>>>>,
     pub whisper_ctx: Arc<Mutex<Option<WhisperContext>>>,
     pub current_whisper_model: Arc<Mutex<String>>,
+    pub current_llama_model: Arc<Mutex<String>>,
 
     // GPU settings (set by the user via Settings UI)
     pub use_gpu: bool,
@@ -52,6 +53,9 @@ pub struct AppState {
     // Static Overlay Hit-Testing
     pub interactive_regions: Vec<Region>,
     pub is_ignoring_cursor: bool,
+
+    // Shared Enigo instance to prevent macOS CoreGraphics crashes
+    pub enigo: Arc<Mutex<Option<Enigo>>>,
 }
 
 impl Default for AppState {
@@ -68,6 +72,7 @@ impl Default for AppState {
             resampled_audio: Arc::new(Mutex::new(None)),
             whisper_ctx: Arc::new(Mutex::new(None)),
             current_whisper_model: Arc::new(Mutex::new(String::new())),
+            current_llama_model: Arc::new(Mutex::new(String::new())),
             use_gpu: true,
             gpu_device: -1, // -1 = let transcription engine/llama auto-pick the best GPU
             dictate_hotkey_id: None,
@@ -76,6 +81,7 @@ impl Default for AppState {
             magic_hotkey_id: None,
             interactive_regions: Vec::new(),
             is_ignoring_cursor: false,
+            enigo: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -119,7 +125,7 @@ async fn download_model(
     if path.exists() {
         app.emit(
             "download-progress",
-            serde_json::json!({ "progress": 100.0, "speed": "" }),
+            serde_json::json!({ "modelId": model_id, "progress": 100.0, "speed": "" }),
         )
         .ok();
         return Ok(path.to_string_lossy().into_owned());
@@ -170,6 +176,7 @@ async fn download_model(
             app.emit(
                 "download-progress",
                 serde_json::json!({
+                    "modelId": model_id,
                     "progress": progress,
                     "speed": format!("{speed_mb:.1} MB/s"),
                     "downloaded": downloaded,
@@ -183,14 +190,41 @@ async fn download_model(
     }
 
     file.flush().await.map_err(|e| e.to_string())?;
-    drop(file);
+    
+    // Convert to std::fs::File and drop it to forcefully close the file handle
+    // synchronously on Windows, preventing locking issues during rename.
+    let std_file = file.into_std().await;
+    drop(std_file);
 
-    // Rename tmp → final
-    fs::rename(&tmp_path, &path).map_err(|e| format!("Rename failed: {e}"))?;
+    // Give Windows Defender/Search a tiny moment to release any hooks
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+    // Retry loop for rename, with a fallback to copy+delete
+    let mut renamed = false;
+    for _ in 0..5 {
+        if std::fs::rename(&tmp_path, &path).is_ok() {
+            renamed = true;
+            break;
+        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+    }
+
+    if !renamed {
+        // Fallback: Copy and delete if rename absolutely refuses to work
+        if let Err(e) = std::fs::copy(&tmp_path, &path) {
+            // If the copy failed because the temp file is gone, but the destination exists,
+            // it means a parallel download (e.g. React Strict Mode double-render) already finished it.
+            if !path.exists() {
+                return Err(format!("Rename and Copy failed: {}", e));
+            }
+        } else {
+            let _ = std::fs::remove_file(&tmp_path);
+        }
+    }
 
     app.emit(
         "download-progress",
-        serde_json::json!({ "progress": 100.0, "speed": "" }),
+        serde_json::json!({ "modelId": model_id, "progress": 100.0, "speed": "" }),
     )
     .ok();
 
@@ -238,8 +272,10 @@ async fn start_recording(
     s.sample_rate = config.sample_rate().0;
     let channels = config.channels();
     
-    let state_for_err = state.inner().clone();
+    let _state_for_err = state.inner().clone();
 
+    let (init_tx, init_rx) = std::sync::mpsc::channel();
+    
     std::thread::spawn(move || {
         let err_fn = |err| eprintln!("an error occurred on stream: {}", err);
         let stream_res = match config.sample_format() {
@@ -272,7 +308,7 @@ async fn start_recording(
                 None
             ),
             _ => {
-                if let Ok(mut st) = state_for_err.lock() { st.recording = false; }
+                let _ = init_tx.send(Err("Unsupported sample format".to_string()));
                 return;
             }
         };
@@ -280,20 +316,28 @@ async fn start_recording(
         let stream = match stream_res {
             Ok(s) => s,
             Err(e) => {
-                eprintln!("Failed to build audio stream: {}", e);
-                if let Ok(mut st) = state_for_err.lock() { st.recording = false; }
+                let _ = init_tx.send(Err(format!("Failed to build audio stream: {}", e)));
                 return;
             }
         };
         
         if let Err(e) = stream.play() {
-            eprintln!("Failed to play audio stream: {}", e);
-            if let Ok(mut st) = state_for_err.lock() { st.recording = false; }
+            let _ = init_tx.send(Err(format!("Failed to play audio stream: {}", e)));
             return;
         }
         
+        // Notify main thread that stream successfully started
+        let _ = init_tx.send(Ok(()));
+        
         let _ = rx.recv(); // Wait for stop signal
     });
+
+    // Wait for the background thread to confirm stream started
+    if let Err(e) = init_rx.recv().unwrap_or_else(|_| Err("Stream thread panicked".to_string())) {
+        let mut st = state.lock().map_err(|err| err.to_string())?;
+        st.recording = false;
+        return Err(e);
+    }
 
     let app_clone = app.clone();
     let state_monitor = state.inner().clone();
@@ -380,27 +424,36 @@ async fn stop_recording(
 }
 
 async fn ensure_whisper_loaded_internal(app: &AppHandle, state: &SharedState, model_id: &str) -> Result<(), String> {
-    loop {
-        let is_starting = state.lock().unwrap().whisper_starting;
-        if !is_starting { break; }
-        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-    }
+    let (needs_load, use_gpu, gpu_device) = loop {
+        let is_starting = {
+            let s = state.lock().map_err(|e| e.to_string())?;
+            s.whisper_starting
+        };
+        
+        if is_starting {
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+            continue;
+        }
 
-    let (needs_load, use_gpu, gpu_device) = {
         let mut s = state.lock().map_err(|e| e.to_string())?;
+        if s.whisper_starting {
+            continue; // Re-check inside the lock to ensure atomicity
+        }
+
         s.last_activity = std::time::Instant::now();
         let current = s.current_whisper_model.lock().unwrap().clone();
         let ctx_is_none = s.whisper_ctx.lock().unwrap().is_none();
-        (current != model_id || ctx_is_none, s.use_gpu, s.gpu_device)
+        let load_required = current != model_id || ctx_is_none;
+        
+        if load_required {
+            s.whisper_starting = true;
+        }
+        
+        break (load_required, s.use_gpu, s.gpu_device);
     };
 
     if !needs_load {
         return Ok(());
-    }
-
-    {
-        let mut s = state.lock().map_err(|e| e.to_string())?;
-        s.whisper_starting = true;
     }
 
     let model_path_str = model_path(app, model_id).to_string_lossy().into_owned();
@@ -731,6 +784,7 @@ async fn start_llama_server_internal(app: &AppHandle, state: &SharedState, model
 
     let mut s = state.lock().map_err(|e| e.to_string())?;
     s.llama_server_child = Some(child);
+    *s.current_llama_model.lock().unwrap() = model_id.to_string();
     s.last_activity = std::time::Instant::now();
     Ok(())
 }
@@ -750,8 +804,12 @@ async fn start_llama_server(app: AppHandle, state: State<'_, SharedState>, model
                 },
                 None => true,
             };
-            if is_dead {
-                s.llama_server_child = None;
+            
+            let wrong_model = *s.current_llama_model.lock().unwrap() != model_id;
+
+            if is_dead || wrong_model {
+                // Do NOT set s.llama_server_child = None here.
+                // We MUST leave it in the state so start_llama_server_internal can .kill() it!
                 s.llama_server_starting = true;
                 true
             } else {
@@ -806,8 +864,11 @@ async fn format_text(
                 None => true,
             };
 
-            if is_dead {
-                s.llama_server_child = None;
+            let wrong_model = *s.current_llama_model.lock().unwrap() != model_id;
+
+            if is_dead || wrong_model {
+                // Do NOT set s.llama_server_child = None here.
+                // We MUST leave it in the state so start_llama_server_internal can .kill() it!
                 s.llama_server_starting = true; // claim the start slot
                 true
             } else {
@@ -935,13 +996,47 @@ CRITICAL RULES:
         "stop": ["\n\nText:", "\n\nTranslate", "\n\nNote:", "\n\nExplanation:", "\n\nOriginal:"]
     });
 
-    let res = match client.post("http://127.0.0.1:42837/v1/chat/completions")
-        .json(&req)
-        .send()
-        .await {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("WARNING: Failed to reach llama-server: {}. Falling back to Whisper text.", e);
+    let mut retries = 30; // up to 15 seconds wait for model to load
+    let mut res_opt = None;
+    
+    while retries > 0 {
+        {
+            if let Ok(mut s) = state.lock() {
+                if let Some(child) = s.llama_server_child.as_mut() {
+                    if let Ok(Some(_)) = child.try_wait() {
+                        eprintln!("WARNING: llama-server crashed unexpectedly during startup. Falling back.");
+                        return Ok(text);
+                    }
+                }
+            }
+        }
+
+        match client.post("http://127.0.0.1:42837/v1/chat/completions")
+            .json(&req)
+            .send()
+            .await 
+        {
+            Ok(r) => {
+                if r.status() == reqwest::StatusCode::SERVICE_UNAVAILABLE {
+                    // llama-server returns 503 while loading model
+                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                    retries -= 1;
+                } else {
+                    res_opt = Some(r);
+                    break;
+                }
+            }
+            Err(_) => {
+                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                retries -= 1;
+            }
+        }
+    }
+
+    let res = match res_opt {
+        Some(r) => r,
+        None => {
+            eprintln!("WARNING: Failed to reach llama-server (timed out). Falling back to Whisper text.");
             return Ok(text);
         }
     };
@@ -970,14 +1065,19 @@ CRITICAL RULES:
 }
 
 #[tauri::command]
-fn paste_text(text: String) -> Result<(), String> {
+fn paste_text(state: State<'_, SharedState>, text: String) -> Result<(), String> {
     let mut clipboard = Clipboard::new().map_err(|e| e.to_string())?;
     clipboard.set_text(text.clone()).map_err(|e| e.to_string())?;
     
     // Slight pause to let OS register the clipboard change
     std::thread::sleep(std::time::Duration::from_millis(150));
     
-    let mut enigo = Enigo::new(&Settings::default()).map_err(|e| e.to_string())?;
+    let st = state.lock().map_err(|e| e.to_string())?;
+    if st.enigo.lock().unwrap().is_none() {
+        *st.enigo.lock().unwrap() = Some(Enigo::new(&Settings::default()).map_err(|e| e.to_string())?);
+    }
+    let mut enigo_guard = st.enigo.lock().unwrap();
+    let enigo = enigo_guard.as_mut().unwrap();
     
     // Explicitly release common modifier keys to prevent the user's physical hotkey from interfering
     enigo.key(Key::Control, Release).ok();
@@ -1257,52 +1357,41 @@ fn register_hotkeys(app: AppHandle, state: State<'_, SharedState>, dictate: Stri
 
 #[tauri::command]
 async fn magic_improve_text(app: AppHandle, state: State<'_, SharedState>, model_id: String) -> Result<(), String> {
-    let mut enigo = Enigo::new(&Settings::default()).map_err(|e| e.to_string())?;
+    // We lock state quickly to initialize enigo if needed, but release it before the long async operations
+    {
+        let st = state.lock().map_err(|e| e.to_string())?;
+        if st.enigo.lock().unwrap().is_none() {
+            *st.enigo.lock().unwrap() = Some(Enigo::new(&Settings::default()).map_err(|e| e.to_string())?);
+        }
+    }
 
     // Give the user a brief moment to release the hotkey
     tokio::time::sleep(tokio::time::Duration::from_millis(400)).await;
 
-    // Explicitly release common modifier keys to prevent the user's physical hotkey from interfering
-    enigo.key(Key::Control, Release).ok();
-    enigo.key(Key::Shift, Release).ok();
-    enigo.key(Key::Alt, Release).ok();
-    enigo.key(Key::Meta, Release).ok();
+    {
+        let st = state.lock().unwrap();
+        let mut enigo_guard = st.enigo.lock().unwrap();
+        let enigo = enigo_guard.as_mut().unwrap();
+
+        // Explicitly release common modifier keys to prevent the user's physical hotkey from interfering
+        enigo.key(Key::Control, Release).ok();
+        enigo.key(Key::Shift, Release).ok();
+        enigo.key(Key::Alt, Release).ok();
+        enigo.key(Key::Meta, Release).ok();
+    }
 
     let mut clipboard = Clipboard::new().map_err(|e| e.to_string())?;
     // Clear clipboard so we can detect if nothing was copied
     let _ = clipboard.set_text("".to_string());
 
     // Step 1: Try to copy the currently selected text (Ctrl+C)
-    #[cfg(target_os = "macos")]
     {
-        enigo.key(Key::Meta, Press).ok();
-        enigo.key(Key::Unicode('c'), Press).ok();
-        enigo.key(Key::Unicode('c'), Release).ok();
-        enigo.key(Key::Meta, Release).ok();
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        enigo.key(Key::Control, Press).ok();
-        enigo.key(Key::C, Press).ok();
-        enigo.key(Key::C, Release).ok();
-        enigo.key(Key::Control, Release).ok();
-    }
+        let st = state.lock().unwrap();
+        let mut enigo_guard = st.enigo.lock().unwrap();
+        let enigo = enigo_guard.as_mut().unwrap();
 
-    tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
-
-    let mut text = clipboard.get_text().unwrap_or_default();
-
-    // If nothing was selected/copied, select everything (Ctrl+A / Cmd+A) and copy again
-    if text.trim().is_empty() {
         #[cfg(target_os = "macos")]
         {
-            enigo.key(Key::Meta, Press).ok();
-            enigo.key(Key::Unicode('a'), Press).ok();
-            enigo.key(Key::Unicode('a'), Release).ok();
-            enigo.key(Key::Meta, Release).ok();
-            
-            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-            
             enigo.key(Key::Meta, Press).ok();
             enigo.key(Key::Unicode('c'), Press).ok();
             enigo.key(Key::Unicode('c'), Release).ok();
@@ -1311,16 +1400,60 @@ async fn magic_improve_text(app: AppHandle, state: State<'_, SharedState>, model
         #[cfg(not(target_os = "macos"))]
         {
             enigo.key(Key::Control, Press).ok();
-            enigo.key(Key::A, Press).ok();
-            enigo.key(Key::A, Release).ok();
-            enigo.key(Key::Control, Release).ok();
-
-            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-
-            enigo.key(Key::Control, Press).ok();
             enigo.key(Key::C, Press).ok();
             enigo.key(Key::C, Release).ok();
             enigo.key(Key::Control, Release).ok();
+        }
+    }
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
+
+    let mut text = clipboard.get_text().unwrap_or_default();
+
+    // If nothing was selected/copied, select everything (Ctrl+A / Cmd+A) and copy again
+    if text.trim().is_empty() {
+        {
+            let st = state.lock().unwrap();
+            let mut enigo_guard = st.enigo.lock().unwrap();
+            let enigo = enigo_guard.as_mut().unwrap();
+
+            #[cfg(target_os = "macos")]
+            {
+                enigo.key(Key::Meta, Press).ok();
+                enigo.key(Key::Unicode('a'), Press).ok();
+                enigo.key(Key::Unicode('a'), Release).ok();
+                enigo.key(Key::Meta, Release).ok();
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                enigo.key(Key::Control, Press).ok();
+                enigo.key(Key::A, Press).ok();
+                enigo.key(Key::A, Release).ok();
+                enigo.key(Key::Control, Release).ok();
+            }
+        }
+        
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        
+        {
+            let st = state.lock().unwrap();
+            let mut enigo_guard = st.enigo.lock().unwrap();
+            let enigo = enigo_guard.as_mut().unwrap();
+
+            #[cfg(target_os = "macos")]
+            {
+                enigo.key(Key::Meta, Press).ok();
+                enigo.key(Key::Unicode('c'), Press).ok();
+                enigo.key(Key::Unicode('c'), Release).ok();
+                enigo.key(Key::Meta, Release).ok();
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                enigo.key(Key::Control, Press).ok();
+                enigo.key(Key::C, Press).ok();
+                enigo.key(Key::C, Release).ok();
+                enigo.key(Key::Control, Release).ok();
+            }
         }
         
         tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
@@ -1354,7 +1487,10 @@ async fn magic_improve_text(app: AppHandle, state: State<'_, SharedState>, model
                 },
                 None => true,
             };
-            if is_dead {
+            
+            let wrong_model = *s.current_llama_model.lock().unwrap() != model_id;
+
+            if is_dead || wrong_model {
                 s.llama_server_child = None;
                 s.llama_server_starting = true;
                 true
@@ -1368,7 +1504,39 @@ async fn magic_improve_text(app: AppHandle, state: State<'_, SharedState>, model
         if let Ok(mut s) = state.lock() {
             s.llama_server_starting = false;
         }
-        result?;
+        if let Err(e) = result {
+            eprintln!("WARNING: Failed to start llama-server for magic improve: {}", e);
+            let _ = app.emit("magic-processing-end", ());
+            clipboard.set_text(text.clone()).unwrap_or_default();
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+            
+            {
+                let st = state.lock().unwrap();
+                let mut enigo_guard = st.enigo.lock().unwrap();
+                let enigo = enigo_guard.as_mut().unwrap();
+
+                enigo.key(Key::Control, Release).ok();
+                enigo.key(Key::Shift, Release).ok();
+                enigo.key(Key::Alt, Release).ok();
+                enigo.key(Key::Meta, Release).ok();
+
+                #[cfg(target_os = "macos")]
+                {
+                    enigo.key(Key::Meta, Press).ok();
+                    enigo.key(Key::Unicode('v'), Press).ok();
+                    enigo.key(Key::Unicode('v'), Release).ok();
+                    enigo.key(Key::Meta, Release).ok();
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    enigo.key(Key::Control, Press).ok();
+                    enigo.key(Key::V, Press).ok();
+                    enigo.key(Key::V, Release).ok();
+                    enigo.key(Key::Control, Release).ok();
+                }
+            }
+            return Err(e);
+        }
         tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
     }
 
@@ -1402,13 +1570,111 @@ ABSOLUTE RULES — violating any of these is a critical failure:
         "stop": ["\n\nNote:", "\n\nExplanation:", "\n\nOriginal:", "\n\nImproved:"]
     });
 
-    let res = client.post("http://127.0.0.1:42837/v1/chat/completions")
-        .json(&req)
-        .send()
-        .await
-        .map_err(|e| format!("Failed to reach llama-server: {}", e))?;
+    let mut retries = 30;
+    let mut res_opt = None;
 
-    let json: serde_json::Value = res.json().await.map_err(|e| e.to_string())?;
+    while retries > 0 {
+        {
+            if let Ok(mut s) = state.lock() {
+                if let Some(child) = s.llama_server_child.as_mut() {
+                    if let Ok(Some(_)) = child.try_wait() {
+                        eprintln!("WARNING: llama-server crashed unexpectedly during magic improve startup.");
+                        let _ = app.emit("magic-processing-end", ());
+                        clipboard.set_text(text.clone()).unwrap_or_default();
+                        
+                        let st_clone = state.inner().clone();
+                        tokio::task::spawn(async move {
+                            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+                            if let Ok(st) = st_clone.lock() {
+                                if let Ok(mut enigo_guard) = st.enigo.lock() {
+                                    if let Some(enigo) = enigo_guard.as_mut() {
+                                        enigo.key(Key::Control, Release).ok();
+                                        enigo.key(Key::Shift, Release).ok();
+                                        enigo.key(Key::Alt, Release).ok();
+                                        enigo.key(Key::Meta, Release).ok();
+                                        #[cfg(target_os = "macos")]
+                                        {
+                                            enigo.key(Key::Meta, Press).ok();
+                                            enigo.key(Key::Unicode('v'), Press).ok();
+                                            enigo.key(Key::Unicode('v'), Release).ok();
+                                            enigo.key(Key::Meta, Release).ok();
+                                        }
+                                        #[cfg(not(target_os = "macos"))]
+                                        {
+                                            enigo.key(Key::Control, Press).ok();
+                                            enigo.key(Key::V, Press).ok();
+                                            enigo.key(Key::V, Release).ok();
+                                            enigo.key(Key::Control, Release).ok();
+                                        }
+                                    }
+                                }
+                            }
+                        });
+                        return Err("LLaMA server crashed unexpectedly.".into());
+                    }
+                }
+            }
+        }
+        match client.post("http://127.0.0.1:42837/v1/chat/completions")
+            .json(&req)
+            .send()
+            .await 
+        {
+            Ok(r) => {
+                if r.status() == reqwest::StatusCode::SERVICE_UNAVAILABLE {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                    retries -= 1;
+                } else {
+                    res_opt = Some(r);
+                    break;
+                }
+            }
+            Err(_) => {
+                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                retries -= 1;
+            }
+        }
+    }
+
+    let res = match res_opt {
+        Some(r) => r,
+        None => {
+            eprintln!("WARNING: Failed to reach llama-server for magic improve (timed out).");
+            let _ = app.emit("magic-processing-end", ());
+            // Make sure to paste the original text back so it isn't lost
+            clipboard.set_text(text).unwrap_or_default();
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+            
+            {
+                let st = state.lock().unwrap();
+                let mut enigo_guard = st.enigo.lock().unwrap();
+                let enigo = enigo_guard.as_mut().unwrap();
+
+                enigo.key(Key::Control, Release).ok();
+                enigo.key(Key::Shift, Release).ok();
+                enigo.key(Key::Alt, Release).ok();
+                enigo.key(Key::Meta, Release).ok();
+
+                #[cfg(target_os = "macos")]
+                {
+                    enigo.key(Key::Meta, Press).ok();
+                    enigo.key(Key::Unicode('v'), Press).ok();
+                    enigo.key(Key::Unicode('v'), Release).ok();
+                    enigo.key(Key::Meta, Release).ok();
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    enigo.key(Key::Control, Press).ok();
+                    enigo.key(Key::V, Press).ok();
+                    enigo.key(Key::V, Release).ok();
+                    enigo.key(Key::Control, Release).ok();
+                }
+            }
+            return Err("Failed to reach LLM server (timed out)".to_string());
+        }
+    };
+
+    let json: serde_json::Value = res.json().await.unwrap_or_default();
     let improved_text = json["choices"][0]["message"]["content"]
         .as_str()
         .unwrap_or(&text)
@@ -1418,26 +1684,32 @@ ABSOLUTE RULES — violating any of these is a critical failure:
 
     tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
-    // Explicitly release common modifier keys again before pasting
-    enigo.key(Key::Control, Release).ok();
-    enigo.key(Key::Shift, Release).ok();
-    enigo.key(Key::Alt, Release).ok();
-    enigo.key(Key::Meta, Release).ok();
+    {
+        let st = state.lock().unwrap();
+        let mut enigo_guard = st.enigo.lock().unwrap();
+        let enigo = enigo_guard.as_mut().unwrap();
 
-    // Paste (Ctrl+V)
-    #[cfg(target_os = "macos")]
-    {
-        enigo.key(Key::Meta, Press).ok();
-        enigo.key(Key::Unicode('v'), Press).ok();
-        enigo.key(Key::Unicode('v'), Release).ok();
-        enigo.key(Key::Meta, Release).ok();
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        enigo.key(Key::Control, Press).ok();
-        enigo.key(Key::V, Press).ok();
-        enigo.key(Key::V, Release).ok();
+        // Explicitly release common modifier keys again before pasting
         enigo.key(Key::Control, Release).ok();
+        enigo.key(Key::Shift, Release).ok();
+        enigo.key(Key::Alt, Release).ok();
+        enigo.key(Key::Meta, Release).ok();
+
+        // Paste (Ctrl+V)
+        #[cfg(target_os = "macos")]
+        {
+            enigo.key(Key::Meta, Press).ok();
+            enigo.key(Key::Unicode('v'), Press).ok();
+            enigo.key(Key::Unicode('v'), Release).ok();
+            enigo.key(Key::Meta, Release).ok();
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            enigo.key(Key::Control, Press).ok();
+            enigo.key(Key::V, Press).ok();
+            enigo.key(Key::V, Release).ok();
+            enigo.key(Key::Control, Release).ok();
+        }
     }
 
     let _ = app.emit("magic-processing-end", ());

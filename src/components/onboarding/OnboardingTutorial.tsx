@@ -130,7 +130,11 @@ export function OnboardingTutorial() {
             <div className="text-center">
               <h2 className="text-xl font-bold text-white mb-2">Try it out!</h2>
               <p className="text-sm text-zinc-400 flex items-center justify-center gap-2">
-                Press <kbd className="px-2 py-0.5 bg-zinc-800 border border-zinc-700 rounded text-xs text-white font-mono">{dictateHotkey}</kbd> to talk, or click the mic on the widget below.
+                Press <kbd className="px-2 py-0.5 bg-zinc-800 border border-zinc-700 rounded text-xs text-white font-mono">
+                  {navigator.userAgent.includes("Mac") 
+                    ? dictateHotkey.replace(/CommandOrControl/g, "⌘").replace(/Shift/g, "⇧").replace(/Alt/g, "⌥").replace(/\+/g, " ")
+                    : dictateHotkey.replace(/CommandOrControl/g, "Ctrl")}
+                </kbd> to talk, or click the mic on the widget below.
               </p>
             </div>
 

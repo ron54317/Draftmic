@@ -4,6 +4,7 @@ import { TitleBar } from "./components/TitleBar";
 import { Onboarding } from "./components/onboarding/Onboarding";
 import { Dashboard } from "./components/dashboard/Dashboard";
 import { DictateWidget } from "./components/widget/DictateWidget";
+import { ToastContainer, showToast } from "./components/ui/Toast";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -57,6 +58,12 @@ function App() {
           await invoke("start_llama_server", { modelId: selectedLlmModel });
         } catch (e) {
           console.error("Llama server init failed:", e);
+          useAppStore.getState().setDownloadingModel(null);
+          showToast({
+            type: "error",
+            title: "LLaMA model failed to load",
+            message: String(e),
+          });
         }
       };
       initLlama();
@@ -83,6 +90,12 @@ function App() {
           }
         } catch (e) {
           console.error("Whisper init failed:", e);
+          useAppStore.getState().setDownloadingModel(null);
+          showToast({
+            type: "error",
+            title: "Whisper model failed to load",
+            message: String(e),
+          });
         }
       };
       initWhisper();
@@ -96,13 +109,13 @@ function App() {
     
     const unlisten = listen("download-progress", (event: any) => {
       if (event.payload) {
+        const payload = event.payload;
         const state = useAppStore.getState();
-        const dlModel = state.downloadingModel;
-        const isLlm = LLM_MODELS.some(m => m.id === dlModel);
+        const isLlm = LLM_MODELS.some(m => m.id === payload.modelId);
         if (isLlm) {
-          state.setLlmModelProgress(event.payload.progress, event.payload.speed);
+          state.setLlmModelProgress(payload.progress, payload.speed);
         } else {
-          state.setModelProgress(event.payload.progress, event.payload.speed);
+          state.setModelProgress(payload.progress, payload.speed);
         }
       }
     });
@@ -139,6 +152,9 @@ function App() {
           {screen === "onboarding" ? <Onboarding /> : <Dashboard />}
         </motion.div>
       </AnimatePresence>
+
+      {/* In-app toast notifications — replaces browser alert() */}
+      <ToastContainer />
 
       <style>{`
         @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }

@@ -218,7 +218,13 @@ export function OnboardingPermissions() {
                         <div className="flex flex-col">
                           <span className="text-white font-semibold text-[16px]">Global Hotkey</span>
                           <span className="text-[13px] text-gray-400 mt-0.5">
-                            Current: <span className="text-blue-400 font-mono font-medium">{dictateHotkey?.replace(/CommandOrControl/g, "Cmd/Ctrl") || "Not set"}</span>
+                            Current: <span className="text-blue-400 font-mono font-medium">
+                              {dictateHotkey 
+                                ? (navigator.userAgent.includes("Mac") 
+                                  ? dictateHotkey.replace(/CommandOrControl/g, "⌘").replace(/Shift/g, "⇧").replace(/Alt/g, "⌥").replace(/\+/g, " ")
+                                  : dictateHotkey.replace(/CommandOrControl/g, "Ctrl"))
+                                : "Not set"}
+                            </span>
                           </span>
                         </div>
                       </div>
