@@ -49,6 +49,7 @@ pub struct AppState {
     pub ptt_hotkey_id: Option<u32>,
     pub translate_hotkey_id: Option<u32>,
     pub magic_hotkey_id: Option<u32>,
+    pub toggle_widget_hotkey_id: Option<u32>,
 
     // Static Overlay Hit-Testing
     pub interactive_regions: Vec<Region>,
@@ -79,6 +80,7 @@ impl Default for AppState {
             ptt_hotkey_id: None,
             translate_hotkey_id: None,
             magic_hotkey_id: None,
+            toggle_widget_hotkey_id: None,
             interactive_regions: Vec::new(),
             is_ignoring_cursor: false,
             enigo: Arc::new(Mutex::new(None)),
@@ -1352,6 +1354,18 @@ fn register_hotkeys(app: AppHandle, state: State<'_, SharedState>, dictate: Stri
         }
     }
     
+    // Hardcoded toggle widget hotkey
+    let toggle_shortcut_str = if cfg!(target_os = "macos") {
+        "Command+Shift+W"
+    } else {
+        "Control+Shift+W"
+    };
+    if let Ok(shortcut) = Shortcut::from_str(toggle_shortcut_str) {
+        if manager.register(shortcut).is_ok() {
+            st.toggle_widget_hotkey_id = Some(shortcut.id());
+        }
+    }
+    
     Ok(())
 }
 
@@ -2149,6 +2163,8 @@ pub fn run() {
                                 act = Some("translate");
                             } else if Some(id) == s.magic_hotkey_id {
                                 act = Some("magic");
+                            } else if Some(id) == s.toggle_widget_hotkey_id {
+                                act = Some("toggle_widget");
                             }
                         }
                         match act {

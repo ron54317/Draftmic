@@ -158,6 +158,11 @@ export function SettingsView() {
             Configure
           </button>
         </Row>
+        <Row label="Toggle Widget Visibility" description="Show or hide the widget globally (cannot be changed)">
+          <div style={{ fontSize: 12, color: "var(--text-muted)", background: "var(--bg-hover)", padding: "4px 8px", borderRadius: 4, fontFamily: "monospace" }}>
+            {navigator.userAgent.includes("Mac") ? "⌘ + Shift + W" : "Ctrl + Shift + W"}
+          </div>
+        </Row>
       </div>
 
       {/* Input Device */}
@@ -331,7 +336,7 @@ export function SettingsView() {
         <Row label="Sound effects" description="Play audio cues when recording starts and stops">
           <Toggle on={soundEffects} onChange={() => setSoundEffects(!soundEffects)} />
         </Row>
-        <Row label="Show idle widget" description="Keep the bottom widget visible. Turn this off to show it only when you use a shortcut.">
+        <Row label="Show idle widget" description={`Keep the bottom widget visible. Toggle anytime with ${navigator.userAgent.includes("Mac") ? "⌘+Shift+W" : "Ctrl+Shift+W"}.`}>
           <Toggle on={showIdleWidget} onChange={() => setShowIdleWidget(!showIdleWidget)} />
         </Row>
         <Row label="Widget Scale" description="Adjust the size of the dictation widget">

@@ -477,6 +477,8 @@ export const DictateWidget: React.FC<DictateWidgetProps> = ({ inline = false, on
             if (state.selectedLlmModel) {
               invoke("magic_improve_text", { modelId: state.selectedLlmModel }).catch(console.error);
             }
+          } else if (action === "toggle_widget") {
+            state.setShowIdleWidget(!state.showIdleWidget);
           }
         });
         if (unmounted) unlistenPressed(); else listeners.push(unlistenPressed);
